@@ -1,0 +1,39 @@
+{
+    "name": "rwc-js",
+    "version": "1.0.0",
+    "description": "Library for building reactive web components",
+    "scripts": {
+        "build-dev": "node build.mjs -d",
+        "build-prod": "node build.mjs"
+    },
+    "bin": {
+        "rwc": "./bin/generate.mjs"
+    },
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/mihapes/rwc-js.git"
+    },
+    "keywords": [
+        "reactive",
+        "web",
+        "components"
+    ],
+    "author": "mihapes",
+    "license": "MIT",
+    "bugs": {
+        "url": "https://github.com/mihapes/rwc-js/issues"
+    },
+    "files": ["/dist/", "!/dist/dev/"],
+    "homepage": "https://github.com/mihapes/rwc-js#readme",
+    "devDependencies": {
+        "@types/estree": "^1.0.0",
+        "@types/htmlparser2": "^3.10.3",
+        "@types/node": "^18.15.11",
+        "esbuild": "^0.17.16",
+        "typescript": "^5.0.4",
+        "acorn": "^8.8.2",
+        "acorn-walk": "^8.2.0",
+        "astring": "^1.8.4",
+        "htmlparser2": "^8.0.2"
+    }
+}
