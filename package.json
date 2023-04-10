@@ -1,6 +1,6 @@
 {
     "name": "rwc-js",
-    "version": "1.0.0",
+    "version": "0.1.0",
     "description": "Library for building reactive web components",
     "scripts": {
         "build-dev": "node build.mjs -d",
