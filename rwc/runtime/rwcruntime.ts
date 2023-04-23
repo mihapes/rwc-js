@@ -228,11 +228,11 @@ export class RwcElement extends HTMLElement {
     }
 
     private runRwcs(proxy: any) {
-        setTimeout(() => {
+        requestAnimationFrame(() => {
             for (let rwc of proxy.$rwcs) {
                 rwc();
             }
-        })
+        });
     }
 
     public $doUpdate(proxyName: string): void {
