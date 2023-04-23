@@ -555,12 +555,16 @@ export class RwcCompiler {
                         const attrName = attr.name.slice(1);
                         this.appendCodeToMethod(currForNode || <estree.Node> ctor, `{
                             let element = el;
-                            const interval = setInterval(() => {
-                                if (element.$setProp) {
-                                    clearInterval(interval);
+                            if (element.$setProp) {
+                                element.$setProp('${attrName}', ${attr.value});
+                            } else {
+                                element.addEventListener("$connected", (event) => {
+                                    event.stopPropagation();
                                     element.$setProp('${attrName}', ${attr.value});
-                                }
-                            }, 16.6);
+                                }, {
+                                    once: true
+                                });
+                            }
                         }`);
                     } else {
                         // other attributes
@@ -625,7 +629,7 @@ export class RwcCompiler {
                     this.$getUpdates('${proxy}').push({
                         isValid: () => {
                             ${forNode ? 'if (node.$forremove === true) return false;' : ''}
-                            if (node.$fortemplate?.$forremove === true) return false
+                            if (node.$fortemplate?.$forremove === true) return false;
                             if (node.$remove) return false;
                             return true;
                         },
