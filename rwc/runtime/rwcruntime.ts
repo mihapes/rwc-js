@@ -12,6 +12,14 @@ export class RwcElement extends HTMLElement {
         this.$ifExpressions = [];
     }
 
+    public connectedCallback(): void {
+        const connectedEvent = new CustomEvent("$connected", {
+            bubbles: true,
+            composed: true
+        });
+        this.dispatchEvent(connectedEvent);
+    }
+
     public $getUpdates(proxyName: string): Update[] {
         if (!(proxyName in this.$updates)) {
             this.$updates[proxyName] = [];
@@ -48,17 +56,25 @@ export class RwcElement extends HTMLElement {
         if (self[name]?.$reactive === true) {
             if (val.$reactive === true) {
                 self[name] = val;
-                val.$rwcs.push(() => this.$doUpdate(name));
+                if (!val.$props.has(name)) {
+                    val.$rwcs.push(() => this.$doUpdate(name));
+                    val.$props.add(name);
+                }
             } else {
                 self[name] = this.reactive(val, name);
             }
         } else {
             self[name] = val;
+            this.$doUpdate(name);
         }
-        setTimeout(() => this.$doUpdate(name));
+        // setTimeout(() => this.$doUpdate(name));
+        // requestAnimationFrame(() => {
+        //     this.$doUpdate(name);
+        // });
+        // this.$doUpdate(name);
     }
 
-    
+
     /**
      * Creates a reactive Proxy for a primitive, array or object.
      * 
@@ -70,14 +86,18 @@ export class RwcElement extends HTMLElement {
         if (Array.isArray(val)) {
             return this.reactiveArray(val, name);
         } else if (typeof val === 'object' && val) {
-            // TODO reactive nested object ?? check if this todo is still relevant
             return this.reactiveObject(val, name);
         } else if (typeof val === 'string' || typeof val === 'number' || typeof val === 'boolean' || val === null || val === undefined) {
-            return this.reactivePrimitive(val, name);            
+            return this.reactivePrimitive(val, name);
         }
     }
 
     private reactiveArray(val: any[], name: string): any[] {
+        // TODO: check how to use path (e.g. array index chain, object property chain) to update only the changed array/object if it is nested in another array/object
+        if (!name) {
+            console.error('Please provide a name to create a reactive array.');
+            return val;
+        }
         let newVal: any[] = [];
         for (let v of val) {
             if (Array.isArray(v)) {
@@ -93,7 +113,7 @@ export class RwcElement extends HTMLElement {
         let p = new Proxy(val, {
             set: (target, property, value, receiver) => {
                 // TODO: check this if condition
-                if (Array.isArray(value) && property !== '$rwcs') {
+                if (Array.isArray(value) && property !== '$rwcs' && property !== '$props') {
                     value = this.reactiveArray(value, name);
                 } else if (typeof value === 'object') {
                     value = this.reactiveObject(value, name);
@@ -101,19 +121,17 @@ export class RwcElement extends HTMLElement {
                 (<any> target)[property] = value;
                 this.runRwcs(p);
                 return true;
-            },
-            // TODO: check if pop works without deleteProperty
-            // deleteProperty: (target, key) => {
-            //     const res = Reflect.deleteProperty(target, key);
-            //     this.runRwcs(p);
-            //     return res;
-            // } 
+            }
         });
         this.runRwcs(p);
         return p;
     }
 
     private reactiveObject(val: any, name: string) {
+        if (!name) {
+            console.error('Please provide a name to create a reactive object.');
+            return val;
+        }
         for (let key in val) {
             let v = val[key];
             if (Array.isArray(v)) {
@@ -125,6 +143,11 @@ export class RwcElement extends HTMLElement {
         this.defineRwcProperties(val, name);
         let p = new Proxy(val, {
             set: (target, property, value) => {
+                if (Array.isArray(value) && property !== '$rwcs' && property !== '$props') {
+                    value = this.reactiveArray(value, name);
+                } else if (typeof value === 'object') {
+                    value = this.reactiveObject(value, name);
+                }
                 target[property] = value;
                 this.runRwcs(p);
                 return true;
@@ -146,6 +169,10 @@ export class RwcElement extends HTMLElement {
     }
 
     private reactivePrimitive(val: Primitive, name: string): any {
+        if (!name) {
+            console.error('Please provide a name to create a reactive primitive.');
+            return val;
+        }
         let obj = {
             value: val,
             prev: val
@@ -153,20 +180,31 @@ export class RwcElement extends HTMLElement {
         this.defineRwcProperties(obj, name);
         let p = new Proxy(obj, {
             set: (target, property, value, receiver) => {
+                // TODO: test reassigning to a reactive primitive.
+                // Is this enough to use assignment with primitives instead of Proxies?
+                // If using injected doUpdate with primitives we should first check if the value is still actually a primitive.
+                if (Array.isArray(value) && property !== '$rwcs' && property !== '$props') {
+                    value = this.reactiveArray(value, name);
+                } else if (typeof value === 'object') {
+                    value = this.reactiveObject(value, name);
+                }
                 const res: any = Reflect.set(target, property, value, receiver);
                 if (target.value !== target.prev) {
                     target.prev = target.value;
                     this.runRwcs(p);
                 }
                 return res;
-            }
+            },
+            // get: (target, property, value) => {
+            //     return Reflect.set(target.value, property, value);
+            // }
         });
         this.runRwcs(p);
         return p;
     }
 
     /**
-     * Defines $reactive and $rwcs properties on an object.
+     * Defines $reactive, $rwcs and $props properties on an object.
      *  
      * @param obj object to add new properties to
      * @param proxyName proxy name
@@ -179,6 +217,11 @@ export class RwcElement extends HTMLElement {
         });
         Object.defineProperty(obj, '$rwcs', {
             value: [() => this.$doUpdate(proxyName)],
+            enumerable: false,
+            writable: true
+        });
+        Object.defineProperty(obj, '$props', {
+            value: new Set(),
             enumerable: false,
             writable: true
         });
@@ -207,7 +250,7 @@ export class RwcElement extends HTMLElement {
     public $filterUpdates(): void {
         for (let proxyName in this.$updates) {
             this.$updates[proxyName] = this.$updates[proxyName].
-                filter(update => update.isValid());    
+                filter(update => update.isValid());
         }
     }
 
@@ -235,10 +278,4 @@ interface Update {
     update(): void;
 }
 
-type Primitive = string | number | boolean | null |undefined;
-
-// Object.defineProperty(window, 'RwcElement', {
-//     value: RwcElement,
-//     enumerable: false,
-//     writable: false
-// });
+type Primitive = string | number | boolean | null | undefined;
