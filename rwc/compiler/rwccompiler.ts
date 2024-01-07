@@ -1,34 +1,38 @@
-import * as acorn from 'acorn';
-import { generate } from 'astring';
-import * as htmlparser2 from 'htmlparser2';
-import * as walk from 'acorn-walk';
+import * as acorn from "acorn";
+import { generate } from "astring";
+import * as htmlparser2 from "htmlparser2";
+import * as walk from "acorn-walk";
+import { getChildren, textContent, getName, hasAttrib, getAttributeValue, getParent } from "domutils";
+import { Element, ChildNode, AnyNode, Text } from "../../node_modules/htmlparser2/node_modules/domhandler";
+import * as estree from "estree";
 import {
-    getChildren, textContent, getName,
-    hasAttrib, getAttributeValue, getParent
-} from 'domutils';
-import { Element, ChildNode, AnyNode, Text } from '../../node_modules/htmlparser2/node_modules/domhandler';
-import * as estree from 'estree';
-import { 
-    AssignmentExpression, BlockStatement, Expression, 
-    ForStatement, Literal, MemberExpression, 
-    MethodDefinition,Program, SpreadElement, Statement 
-} from 'estree';
+    AssignmentExpression,
+    BlockStatement,
+    Expression,
+    ForStatement,
+    Literal,
+    MemberExpression,
+    MethodDefinition,
+    Program,
+    SpreadElement,
+    Statement,
+} from "estree";
 
 export class RwcCompiler {
-    
     private _componentSrc: string | null = null;
     private _viewRoot: ChildNode | null = null;
     private _styleSrc: string | null = null;
     private _ast: acorn.Node | null = null;
-    private _componentName: string = '';
+    private _componentName: string = "";
     private _proxies: Set<string> = new Set();
     private _constructorNode: acorn.Node | null = null;
+    private _renderNode: acorn.Node | null = null;
 
     private getComponentName(): string {
         return this._componentName;
     }
     private setComponentName(val: string | undefined) {
-        this._componentName = val || '';
+        this._componentName = val || "";
     }
 
     private getComponentSrc(): string | null {
@@ -66,9 +70,16 @@ export class RwcCompiler {
         return this._constructorNode;
     }
 
+    private getRenderNode(): acorn.Node | null {
+        if (this._renderNode === null) {
+            this._renderNode = this.findMethodAstNode("$render");
+        }
+        return this._renderNode;
+    }
+
     /**
      * Adds a new reactive proxy name to the set of existing proxy names
-     * 
+     *
      * @param name reactive proxy name to be added to existing proxies
      */
     private addProxyName(name: string): void {
@@ -76,8 +87,8 @@ export class RwcCompiler {
     }
 
     /**
-     * Returns web component abstract syntax tree or null. Initializes the ast if needed. 
-     * 
+     * Returns web component abstract syntax tree or null. Initializes the ast if needed.
+     *
      * @returns web component abstract syntax tree or null
      */
     private getAst(): acorn.Node | null {
@@ -99,51 +110,51 @@ export class RwcCompiler {
 
     /**
      * Generates reactive Javascript web component source from rwc syntax.
-     * 
+     *
      * @param rwcSrc rwc file source string
      * @returns generated web component from rwc source or null if not successful
      */
     public generateWebComponent(rwcSrc: string): string | null {
         const root = htmlparser2.parseDocument(rwcSrc);
-        
+
         for (let childNode of getChildren(root)) {
-            const element: Element = <Element> childNode;
+            const element: Element = <Element>childNode;
             switch (getName(element)) {
-                case 'component':
-                    if (hasAttrib(element, 'name')) {
-                        this.setComponentName(getAttributeValue(element, 'name'));
+                case "component":
+                    if (hasAttrib(element, "name")) {
+                        this.setComponentName(getAttributeValue(element, "name"));
                         this.setComponentSrc(textContent(childNode));
                     } else {
-                        this.printError('name attribute missing from <component>');
+                        this.printError("name attribute missing from <component>");
                         return null;
                     }
                     break;
-                case 'style':
+                case "style":
                     this.setStyleSrc(textContent(childNode));
                     break;
-                case 'view':
+                case "view":
                     this.setViewRoot(childNode);
                     break;
             }
         }
 
-        if (this.getComponentSrc === null) {
-            this.printError('<component> missing.');
+        if (this.getComponentSrc() === null) {
+            this.printError("<component> missing.");
             return null;
         }
-        
+
         this.parseComponentSrc();
         this.appendStyle();
         this.appendView();
-         
+
         return this.generateComponent();
     }
 
     /**
      * TODO: https://github.com/Microsoft/TypeScript/wiki/Using-the-Compiler-API
      *       Re-printing Sections of a TypeScript File
-     *       for reading a ts file -> use to create standalone components? 
-     * @returns 
+     *       for reading a ts file -> use to create standalone components?
+     * @returns
      */
 
     /* TODO  docstring
@@ -154,17 +165,20 @@ export class RwcCompiler {
     private parseComponentSrc(): void {
         this.setComponentSrc(`class ${this.getComponentName()} extends rwc.RwcElement {
             ${this.getComponentSrc()}
+            $render() {
+
+            }
         }`);
 
         const ast = this.getAst();
-        
+
         if (ast === null) {
             return;
         }
-        
+
         // find reactive proxies
-        walk.full(ast, node => {
-            const estreeNode = <estree.Node> node;
+        walk.full(ast, (node) => {
+            const estreeNode = <estree.Node>node;
             const data = this.getReactiveAssignmentData(estreeNode);
             if (data === null) {
                 return;
@@ -173,14 +187,15 @@ export class RwcCompiler {
             this.addProxyName(data.name);
 
             let nameNode: Literal = {
-                type: 'Literal',
+                type: "Literal",
                 value: data.name,
-                raw: `'${data.name}'`
-            }
+                raw: `'${data.name}'`,
+            };
 
-            data.args.push(nameNode);
-            
-            let proxies = this.getReferencedProxyNames(<acorn.Node> data.args[0]);
+            // data.args.push(nameNode);
+            data.args.splice(1, 0, nameNode);
+
+            let proxies = this.getReferencedProxyNames(<acorn.Node>data.args[0]);
             for (let proxy of proxies) {
                 this.appendCodeToConstructor(`
                     this.$getUpdates('${proxy}').push({
@@ -194,9 +209,17 @@ export class RwcCompiler {
         });
     }
 
+    private appendCodeToRender(code: string): void {
+        const render = this.getRenderNode();
+        if (render === null) {
+            return;
+        }
+        this.appendCodeToMethod(<estree.Node>render, code);
+    }
+
     /**
      * Appends new code to constructor node body.
-     * 
+     *
      * @param code source string to be converted to ast nodes and appended to constructor body
      */
     private appendCodeToConstructor(code: string): void {
@@ -204,18 +227,18 @@ export class RwcCompiler {
         if (ctor === null) {
             return;
         }
-        this.appendCodeToMethod(<estree.Node> ctor, code);
+        this.appendCodeToMethod(<estree.Node>ctor, code);
     }
 
-    private appendCodeToMethod(node: estree.Node | ForNode | BlockStatement| null, code: string | BlockStatement): Statement[] | null {
+    private appendCodeToMethod(node: estree.Node | ForNode | BlockStatement | null, code: string | BlockStatement): Statement[] | null {
         let estreeNode: BlockStatement | null = null;
         if (node instanceof ForNode) {
             estreeNode = node.getForBody();
-        } else if ((<estree.Node> node).type === 'BlockStatement') {
-            estreeNode = <BlockStatement> node;
+        } else if ((<estree.Node>node).type === "BlockStatement") {
+            estreeNode = <BlockStatement>node;
         } else {
-            let currNode = <estree.Node> node;
-            if (currNode.type === 'MethodDefinition') {
+            let currNode = <estree.Node>node;
+            if (currNode.type === "MethodDefinition") {
                 estreeNode = currNode.value.body;
             } else {
                 return null;
@@ -225,11 +248,11 @@ export class RwcCompiler {
             return null;
         }
         let bodyStatements: Statement[];
-        if (typeof code === 'string') {
-            const program = <Program> <estree.Node> toAst(code);
-            bodyStatements = program.body.map(s => <Statement> s);
+        if (typeof code === "string") {
+            const program = <Program>(<estree.Node>toAst(code));
+            bodyStatements = program.body.map((s) => <Statement>s);
         } else {
-            bodyStatements = [<Statement> code];
+            bodyStatements = [<Statement>code];
         }
         estreeNode.body.push(...bodyStatements);
         return bodyStatements;
@@ -237,26 +260,28 @@ export class RwcCompiler {
 
     /**
      * Returns a set of proxy name strings found in the ast.
-     * 
+     *
      * @param startNode ast node from which to start searching for proxy names
      * @param referencedProxies set of found proxy names
      * @returns set of found proxy names
      */
-    public getReferencedProxyNames(startNode: acorn.Node, referencedProxies = new Set<string>): Set<string> {
-        walk.full(startNode, node => {
-            const estreeNode = <estree.Node> node;
-            if (estreeNode.type === 'MemberExpression') {
-                const memberExpr = <MemberExpression> estreeNode;
-                if (memberExpr.object.type === 'ThisExpression' && 
-                    (memberExpr.property.type === 'PrivateIdentifier' || memberExpr.property.type === 'Identifier')) {
+    public getReferencedProxyNames(startNode: acorn.Node, referencedProxies = new Set<string>()): Set<string> {
+        walk.full(startNode, (node) => {
+            const estreeNode = <estree.Node>node;
+            if (estreeNode.type === "MemberExpression") {
+                const memberExpr = <MemberExpression>estreeNode;
+                if (
+                    memberExpr.object.type === "ThisExpression" &&
+                    (memberExpr.property.type === "PrivateIdentifier" || memberExpr.property.type === "Identifier")
+                ) {
                     const proxyName = memberExpr.property.name;
                     if (this.getProxies().has(proxyName)) {
                         referencedProxies.add(proxyName);
                     }
                 }
-            } else if (estreeNode.type === 'CallExpression') {
-                if (estreeNode.callee.type === 'MemberExpression') {
-                    if (estreeNode.callee.property.type === 'PrivateIdentifier' || estreeNode.callee.property.type === 'Identifier') {
+            } else if (estreeNode.type === "CallExpression") {
+                if (estreeNode.callee.type === "MemberExpression") {
+                    if (estreeNode.callee.property.type === "PrivateIdentifier" || estreeNode.callee.property.type === "Identifier") {
                         let methodNode = this.findMethodAstNode(estreeNode.callee.property.name);
                         if (methodNode !== null) {
                             this.getReferencedProxyNames(methodNode, referencedProxies);
@@ -270,7 +295,7 @@ export class RwcCompiler {
 
     /**
      * Returns ast node for method definition with matching name if it extsts.
-     * 
+     *
      * @param name method name to find
      * @param startNode ast node from where to start searching
      * @returns method definition ast node or null if not found
@@ -283,82 +308,82 @@ export class RwcCompiler {
         }
         walk.simple(startNode, {
             MethodDefinition(node) {
-                const estreeNode = <estree.Node> node;
-                const methodDefinition = <MethodDefinition> estreeNode;
-                if (methodDefinition.kind == 'method' && 
-                    (methodDefinition.key.type === 'PrivateIdentifier' || methodDefinition.key.type === 'Identifier') && 
-                    methodDefinition.key.name === name) {
-                        res = node;
+                const estreeNode = <estree.Node>node;
+                const methodDefinition = <MethodDefinition>estreeNode;
+                if (
+                    methodDefinition.kind == "method" &&
+                    (methodDefinition.key.type === "PrivateIdentifier" || methodDefinition.key.type === "Identifier") &&
+                    methodDefinition.key.name === name
+                ) {
+                    res = node;
                 }
-            }
+            },
         });
         return res;
     }
 
     /**
      * Returns a constructor node in the ast if one exists.
-     * 
+     *
      * @param startNode ast node to start searching from
      * @returns constructor ast node or null if no constructor found
      */
-    private findConstructorNode(startNode: acorn.Node | null = null): acorn.Node | null{
+    private findConstructorNode(startNode: acorn.Node | null = null): acorn.Node | null {
         startNode = startNode === null ? this.getAst() : startNode;
         if (startNode === null) {
             return null;
-        } 
+        }
         let constructor: acorn.Node | null = null;
         walk.simple(startNode, {
             MethodDefinition(node) {
-                const estreeNode = <estree.Node> node;
-                const methodDefinition = <MethodDefinition> estreeNode; 
-                if (methodDefinition.kind === 'constructor') {
+                const estreeNode = <estree.Node>node;
+                const methodDefinition = <MethodDefinition>estreeNode;
+                if (methodDefinition.kind === "constructor") {
                     constructor = node;
                 }
-            }
+            },
         });
         return constructor;
     }
 
     /**
      * Returns reactive variable name and CallExpression arguments list if node is a reactive assignment and null otherwise.
-     * 
+     *
      * @param node ast node to get reactive assignment data from
      * @returns object with reactive variable name and CallExpression args list or null if node is not a reactive assignment
      */
-    private getReactiveAssignmentData(node: estree.Node): null| { name: string, args: Array<Expression | SpreadElement> } {
-        if (node.type !== 'AssignmentExpression') {
+    private getReactiveAssignmentData(node: estree.Node): null | { name: string; args: Array<Expression | SpreadElement> } {
+        if (node.type !== "AssignmentExpression") {
             return null;
         }
 
-        const assignmentExpr = <AssignmentExpression> node;
-        
-        if (assignmentExpr.left.type !== 'MemberExpression') {
+        const assignmentExpr = <AssignmentExpression>node;
+
+        if (assignmentExpr.left.type !== "MemberExpression") {
             return null;
         }
-        if (assignmentExpr.left.object.type !== 'ThisExpression') {
+        if (assignmentExpr.left.object.type !== "ThisExpression") {
             return null;
         }
-        if (assignmentExpr.left.property.type !== 'PrivateIdentifier' && 
-            assignmentExpr.left.property.type !== 'Identifier') {
-                return null;
-        }
-        if (assignmentExpr.right.type !== 'CallExpression') {
+        if (assignmentExpr.left.property.type !== "PrivateIdentifier" && assignmentExpr.left.property.type !== "Identifier") {
             return null;
         }
-        if (assignmentExpr.right.callee.type !== 'MemberExpression') {
+        if (assignmentExpr.right.type !== "CallExpression") {
             return null;
         }
-        if (assignmentExpr.right.callee.property.type !== 'PrivateIdentifier' && 
-            assignmentExpr.right.callee.property.type !== 'Identifier') {
-                return null;
-        }
-        if (assignmentExpr.right.callee.property.name !== 'reactive') {
+        if (assignmentExpr.right.callee.type !== "MemberExpression") {
             return null;
         }
-        
+        if (assignmentExpr.right.callee.property.type !== "PrivateIdentifier" && assignmentExpr.right.callee.property.type !== "Identifier") {
+            return null;
+        }
+        if (assignmentExpr.right.callee.property.name !== "$reactive") {
+            return null;
+        }
+
         return {
             name: assignmentExpr.left.property.name,
-            args: assignmentExpr.right.arguments
+            args: assignmentExpr.right.arguments,
         };
     }
 
@@ -374,7 +399,7 @@ export class RwcCompiler {
             style.textContent = \`${style.trim()}\`
             this.shadowRoot.appendChild(style);
         `;
-        this.appendCodeToConstructor(str);
+        this.appendCodeToRender(str);
     }
 
     private appendView(): void {
@@ -382,15 +407,19 @@ export class RwcCompiler {
         if (rootNode === null) {
             return;
         }
-        
+
         const ctor = this.getConstructorNode();
+        const render = this.getRenderNode();
+        if (render === null) {
+            console.log("what?");
+        }
         if (ctor === null) {
             return;
         }
-        const queue: (ChildNode | 'CLOSE_FOR')[] = [...getChildren(rootNode)];
+        const queue: (ChildNode | "CLOSE_FOR")[] = [...getChildren(rootNode)];
         let currParentNode: AnyNode | null = rootNode;
 
-        this.appendCodeToConstructor( `
+        this.appendCodeToRender(`
             let el = null;
             let currParent = this.shadowRoot;
         `);
@@ -404,15 +433,18 @@ export class RwcCompiler {
             if (node === undefined) {
                 break;
             }
-            
-            if (node === 'CLOSE_FOR') {
+
+            if (node === "CLOSE_FOR") {
                 if (currForNode === null) {
                     continue;
                 }
                 if (currForNode.hasChildren()) {
-                    this.appendCodeToMethod(currForNode, `
+                    this.appendCodeToMethod(
+                        currForNode,
+                        `
                         currParent = currParent.parentNode || currParent.$template.parentNode;
-                    `);
+                    `
+                    );
                 }
                 if (currForNode.getProxies().size > 0) {
                     const forStatementNode = currForNode.getForStatementNode();
@@ -421,14 +453,15 @@ export class RwcCompiler {
                     }
                     let stringifiedLoop = generate(forStatementNode);
                     for (let p of currForNode.getProxies()) {
-                        this.appendCodeToMethod(currForNode.getBlockBody(), `
+                        this.appendCodeToMethod(
+                            currForNode.getBlockBody(),
+                            `
                             this.$getUpdates('${p}').push({
                                 isValid: () => {
                                     if (!template) return false;
                                     if (template.$forremove === true) {
                                         return false;
                                     }
-                                    let remove = false;
                                     if (nodes.length > 0) {
                                         for (let e of nodes) {
                                             if (e.$forremove === true) {
@@ -445,7 +478,7 @@ export class RwcCompiler {
                                     let remove = false;
                                     if (nodes.length > 0) {
                                         if (nodes[0].parentNode === null) {
-                                            nodes[0].$template.replaceWith(template);
+                                            nodes[0].$fortemplate.replaceWith(template);
                                         } else {
                                             nodes[0].replaceWith(template);
                                         }
@@ -476,12 +509,14 @@ export class RwcCompiler {
                                     this.$filterUpdates();
                                 }
                             });
-                        `);
+                            this.$getUpdates('${p}')[this.$getUpdates('${p}').length - 1].update();
+                            currParent = currParentBefore;
+                        `
+                        );
                     }
                     if (forStack.length === 1) {
                         currForNode.getBlockBody()?.body.splice(3, 1);
                     }
-
                 }
                 prevWasCloseFor = currForNode.hasChildren();
                 forStack.pop();
@@ -496,9 +531,12 @@ export class RwcCompiler {
             if (getParent(node) !== currParentNode) {
                 currParentNode = getParent(node);
                 if (!prevWasCloseFor) {
-                    this.appendCodeToMethod(currForNode || <estree.Node> ctor, `
+                    this.appendCodeToMethod(
+                        currForNode || <estree.Node>render,
+                        `
                         currParent = currParent.parentNode || currParent.$template.parentNode;
-                    `);
+                    `
+                    );
                 } else {
                     prevWasCloseFor = false;
                 }
@@ -506,71 +544,90 @@ export class RwcCompiler {
 
             if (node.nodeType === 1) {
                 // ELEMENT node
-                for (let attr of (<Element> node).attributes) {
+                for (let attr of (<Element>node).attributes) {
                     if (attr.name === SYNTAX.forAttribute) {
                         const forNode = new ForNode(attr.value);
-                        this.appendCodeToMethod(currForNode || <estree.Node> ctor, forNode.getBlockBody() || '');
+                        this.appendCodeToMethod(currForNode || <estree.Node>render, forNode.getBlockBody() || "");
                         forStack.push(forNode);
                         currForNode = forNode;
-                        currForNode.setProxies(this.getReferencedProxyNames(toAst(`
+                        currForNode.setProxies(
+                            this.getReferencedProxyNames(
+                                toAst(`
                             for (${forNode.getForExpression()}) {}
-                        `)));
+                        `)
+                            )
+                        );
                     }
                 }
-
-                this.appendCodeToMethod(currForNode || <estree.Node> ctor, `
-                    el = document.createElement('${getName(<Element> node)}');
-                    ${currForNode ? 'el.$forremove = false;' : ''}
-                    ${currForNode ? 'nodes.push(el);' : ''}
-                    ${currForNode ? 'el.$fortemplate = template;' : ''}
+                this.appendCodeToMethod(
+                    currForNode || <estree.Node>render,
+                    `
+                    el = document.createElement('${getName(<Element>node)}');
+                    ${currForNode ? "el.$forremove = false;" : ""}
+                    ${currForNode ? "nodes.push(el);" : ""}
+                    ${currForNode ? "el.$fortemplate = template;" : ""}
                     currParent.appendChild(el);
-                `);
+                `
+                );
 
-                for (let attr of (<Element> node).attributes) {
+                for (let attr of (<Element>node).attributes) {
                     if (attr.name.match(/^\(.*\)$/)) {
                         // event listeners
                         const eventName = attr.name.slice(1, -1);
-                        this.appendCodeToMethod(currForNode || <estree.Node> ctor, `
+                        this.appendCodeToMethod(
+                            currForNode || <estree.Node>render,
+                            `
                             el.addEventListener('${eventName}', ${attr.value});
-                        `);
+                        `
+                        );
                     } else if (attr.name === SYNTAX.ifAttribute) {
                         const ifExpression = attr.value;
-                        this.appendCodeToMethod(currForNode || <estree.Node> ctor, this.createIfBody(ifExpression, currForNode));
+                        this.appendCodeToMethod(currForNode || <estree.Node>render, this.createIfBody(ifExpression, currForNode));
                         const proxies = this.getReferencedProxyNames(toAst(ifExpression));
                         if (proxies.size > 0) {
                             for (let proxy of proxies) {
-                                this.appendCodeToMethod(currForNode || <estree.Node> ctor, `
+                                this.appendCodeToMethod(
+                                    currForNode || <estree.Node>render,
+                                    `
                                     this.$getUpdates('${proxy}')
                                         .push(this.$ifExpressions[this.$ifExpressions.length - 1]);
-                                `);
+                                `
+                                );
                             }
                         }
-                        this.appendCodeToMethod(currForNode || <estree.Node> ctor, `
+                        this.appendCodeToMethod(
+                            currForNode || <estree.Node>render,
+                            `
                             this.$ifExpressions = [];
-                        `);
+                        `
+                        );
                     } else if (attr.name === SYNTAX.forAttribute) {
                         // do nothing
                     } else if (attr.name.startsWith(SYNTAX.prop)) {
-                        // prop
+                        // prop, do nothing
                         const attrName = attr.name.slice(1);
-                        this.appendCodeToMethod(currForNode || <estree.Node> ctor, `{
+                        this.appendCodeToMethod(
+                            currForNode || <estree.Node>render,
+                            `{
                             let element = el;
                             if (element.$setProp) {
-                                element.$setProp('${attrName}', ${attr.value});
+                                element.$setProp('${attrName}', ${attr.value}, false);
                             } else {
-                                element.addEventListener("$connected", (event) => {
-                                    event.stopPropagation();
-                                    element.$setProp('${attrName}', ${attr.value});
-                                }, {
-                                    once: true
-                                });
+                                element.$awaitingProps['${attrName}'] = ${attr.value};
                             }
-                        }`);
+                        }`
+                        );
                     } else {
                         // other attributes
                         this.handleAttribute(attr, currForNode);
                     }
                 }
+                this.appendCodeToMethod(
+                    currForNode || <estree.Node>render,
+                    `
+                    if (el.$render) el.$render();
+                `
+                );
             } else if (node.nodeType === 3) {
                 // text node
                 this.handleTextNode(node, currForNode);
@@ -580,7 +637,7 @@ export class RwcCompiler {
 
             // push a value to notify to close a for node
             if (this.nodeHasForAttribute(node)) {
-                queue.unshift('CLOSE_FOR');
+                queue.unshift("CLOSE_FOR");
                 if (children.length > 0 && currForNode) {
                     currForNode.setHasChildren(true);
                 }
@@ -588,9 +645,12 @@ export class RwcCompiler {
 
             // add children to the start of the queue - go depth first
             if (children.length > 0) {
-                this.appendCodeToMethod(currForNode || <estree.Node> ctor, `
+                this.appendCodeToMethod(
+                    currForNode || <estree.Node>render,
+                    `
                     currParent = el;
-                `);
+                `
+                );
                 currParentNode = node;
                 queue.unshift(...children);
             }
@@ -600,7 +660,7 @@ export class RwcCompiler {
     private handleAttribute(attribute: Attribute, forNode: ForNode | null): void {
         const res = this.filterTextContent(attribute.value);
         this.handleAttributeOrTextNode(
-            forNode, 
+            forNode,
             `el.setAttribute('${attribute.name}', ${res.filtered});`,
             `node.setAttribute('${attribute.name}', ${res.filtered});`,
             res.expressions
@@ -618,17 +678,22 @@ export class RwcCompiler {
     }
 
     private handleAttributeOrTextNode(forNode: ForNode | null, appendStr: string, updateStr: string, expressions: string[]): void {
-        this.appendCodeToMethod(forNode || <estree.Node> this.getConstructorNode(), `
+        this.appendCodeToMethod(
+            forNode || <estree.Node>this.getRenderNode(),
+            `
             ${appendStr}
-            ${forNode ? 'currParent.lastChild.$forremove = false;' : ''}
-        `);
+            ${forNode ? "currParent.lastChild.$forremove = false;" : ""}
+        `
+        );
         for (let expression of expressions) {
             for (let proxy of this.getReferencedProxyNames(toAst(expression))) {
-                this.appendCodeToMethod(forNode || <estree.Node> this.getConstructorNode(), `{
+                this.appendCodeToMethod(
+                    forNode || <estree.Node>this.getRenderNode(),
+                    `{
                     let node = currParent.lastChild;
                     this.$getUpdates('${proxy}').push({
                         isValid: () => {
-                            ${forNode ? 'if (node.$forremove === true) return false;' : ''}
+                            ${forNode ? "if (node.$forremove === true) return false;" : ""}
                             if (node.$fortemplate?.$forremove === true) return false;
                             if (node.$remove) return false;
                             return true;
@@ -637,21 +702,22 @@ export class RwcCompiler {
                             ${updateStr}
                         }
                     });
-                }`);
+                }`
+                );
             }
         }
     }
 
     /**
      * Returns true if node has the *for attribute else false.
-     * 
+     *
      * @param {*} node node to be checked for the *for attribute
      */
     private nodeHasForAttribute(node: ChildNode): boolean {
         if (node.nodeType !== 1) {
             return false;
         }
-        for (let attr of (<Element> node).attributes) {
+        for (let attr of (<Element>node).attributes) {
             if (attr.name === SYNTAX.forAttribute) {
                 return true;
             }
@@ -662,33 +728,36 @@ export class RwcCompiler {
     /**
      * Creates a template literal and replaces {{.*}} with ${.*} such that the result may be used
      * in a Text node. Returns the filtered template literal and a list of expressions.
-     * 
-     * @param {*} text text to be filtered 
+     *
+     * @param {*} text text to be filtered
      */
-    private filterTextContent(text: string): { filtered: string, expressions: string[] } {
+    private filterTextContent(text: string): {
+        filtered: string;
+        expressions: string[];
+    } {
         let depth = 0;
-        let filtered = '';
+        let filtered = "";
         let expressions = [];
-        let expression = '';
+        let expression = "";
         let i = 0;
         for (; i < text.length - 1; i++) {
             // stop one before last character
             const curr = text[i];
             const next = text[i + 1];
-            if (curr + next === '{{') {
+            if (curr + next === "{{") {
                 depth++;
                 if (depth === 1) {
-                    filtered += '${';
+                    filtered += "${";
                     i++;
                     continue;
                 }
             }
-            if (curr + next === '}}') {
+            if (curr + next === "}}") {
                 depth--;
                 if (depth === 0) {
-                    filtered += '}';
+                    filtered += "}";
                     expressions.push(expression);
-                    expression = '';
+                    expression = "";
                     i++;
                     continue;
                 }
@@ -703,16 +772,16 @@ export class RwcCompiler {
             filtered += text[i];
         }
         return {
-            filtered: '`' + filtered + '`',
-            expressions: expressions
+            filtered: "`" + filtered + "`",
+            expressions: expressions,
         };
     }
 
     private createIfBody(ifExpression: string, currForNode: ForNode | null): string {
-        return  `{
+        return `{
             let element = el;
             let iftemplate = document.createElement('template');
-            ${currForNode ? 'iftemplate.$forremove = false;' : ''}
+            ${currForNode ? "iftemplate.$forremove = false;" : ""}
             iftemplate.$el = element;
             element.$template = iftemplate;
             this.$ifExpressions.push({
@@ -735,26 +804,38 @@ export class RwcCompiler {
                 }
             });
             this.$ifExpressions[this.$ifExpressions.length - 1].update();
-        }`
+        }`;
+    }
+
+    private tagNameToComponentName(tagName: string): string {
+        return tagName
+            .split("-")
+            .map((n) => this.capitalize(n))
+            .join("");
+    }
+
+    private capitalize(str: string): string {
+        return str[0].toUpperCase() + str.slice(1);
     }
 
     /**
      * Returns generated reactive Javascript web component source string or null.
-     * 
+     *
      * @returns generated Javascript web component source string or null if not successful
      */
     private generateComponent(): string | null {
-        let tagName = this.getComponentName().split(/(?=[A-Z])/)
-            .map(n => n.toLocaleLowerCase())
-            .join('-');
+        let tagName = this.getComponentName()
+            .split(/(?=[A-Z])/)
+            .map((n) => n.toLocaleLowerCase())
+            .join("-");
         const ast = this.getAst();
         if (ast === null) {
-            return null;              
+            return null;
         }
-        const program = <Program> <estree.Node> ast;
-        const defineProgram = <Program> <estree.Node> toAst(`
+        const program = <Program>(<estree.Node>ast);
+        const defineProgram = <Program>(<estree.Node>toAst(`
             customElements.define('${tagName}', ${this.getComponentName()});
-        `);
+        `));
         program.body.push(...defineProgram.body);
         const component = generate(program);
         return component;
@@ -772,35 +853,35 @@ class IfNode {
 
 function toAst(code: string): acorn.Node {
     return acorn.parse(code, {
-        ecmaVersion: 2020
+        ecmaVersion: 2020,
     });
 }
 
 class ForNode {
-
     private _proxies: Set<string> = new Set<string>();
     private _blockBody: BlockStatement | null = null;
     private _forBody: BlockStatement | null = null;
-    private _forExpression: string = '';
+    private _forExpression: string = "";
     private _hasChildren: boolean = false;
     private _forStatementNode: ForStatement | null = null;
 
     constructor(forExpression: string) {
         this._forExpression = forExpression;
-        const program = <Program> <estree.Node> toAst(`{
+        const program = <Program>(<estree.Node>toAst(`{
+            let currParentBefore = currParent;
             let nodes = [];
             let template = document.createElement('template');
             currParent.appendChild(template);
             for (${forExpression}) {}
-            if (nodes.length > 0) {
-                template.remove();
+            if (nodes.length == 0) {
+                currParent.appendChild(template);
             }
             template.$forremove = false;
-        }`);
-        const bodyStatements = program.body.map(s => <Statement> s);
-        this._blockBody = <BlockStatement> bodyStatements[0];
-        this._forStatementNode = <ForStatement> this._blockBody.body[3];
-        this._forBody = <BlockStatement> this._forStatementNode.body;
+        }`));
+        const bodyStatements = program.body.map((s) => <Statement>s);
+        this._blockBody = <BlockStatement>bodyStatements[0];
+        this._forStatementNode = <ForStatement>this._blockBody.body[4];
+        this._forBody = <BlockStatement>this._forStatementNode.body;
     }
 
     public getForStatementNode(): ForStatement | null {
@@ -844,7 +925,7 @@ interface Attribute {
 }
 
 const SYNTAX = {
-    'forAttribute': '*for',
-    'ifAttribute': '*if',
-    'prop': '@'
-}
+    forAttribute: "*for",
+    ifAttribute: "*if",
+    prop: "@",
+};
